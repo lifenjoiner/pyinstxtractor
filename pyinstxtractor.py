@@ -75,40 +75,47 @@ class PyInstArchive:
 
     def checkFile(self):
         print('[*] Processing {}'.format(self.filePath))
-        # Check if it is a 2.0 archive
-        self.fPtr.seek(self.fileSize - self.PYINST20_COOKIE_SIZE, os.SEEK_SET)
-        magicFromFile = self.fPtr.read(len(self.MAGIC))
+        # Skip signature data
+        offset = self.fileSize - self.PYINST20_COOKIE_SIZE
+        self.fPtr.seek(offset, os.SEEK_SET)
+        while offset > 0:
+            magicFromFile = self.fPtr.read(len(self.MAGIC))
+            if magicFromFile == self.MAGIC:
+                break
+            offset -= 1
+            self.fPtr.seek(offset, os.SEEK_SET)
 
-        if magicFromFile == self.MAGIC:
-            self.pyinstVer = 20     # pyinstaller 2.0
-            print('[*] Pyinstaller version: 2.0')
-            return True
+        if offset == 0:
+            print('[*] Error : Unsupported pyinstaller version or not a pyinstaller archive')
+            return False
 
+        self.magic_offset = offset
         # Check for pyinstaller 2.1+ before bailing out
-        self.fPtr.seek(self.fileSize - self.PYINST21_COOKIE_SIZE, os.SEEK_SET)
-        magicFromFile = self.fPtr.read(len(self.MAGIC))
+        if offset <= self.fileSize - self.PYINST21_COOKIE_SIZE:
+            self.fPtr.seek(offset + 24 + 12, os.SEEK_SET)
+            if self.fPtr.read(52) == b'\x00' * 52:
+                print('[*] Pyinstaller version: 2.1+')
+                self.pyinstVer = 21     # pyinstaller 2.1+
+                self.fileSize_nocert = offset + self.PYINST21_COOKIE_SIZE
+                return True
 
-        if magicFromFile == self.MAGIC:
-            print('[*] Pyinstaller version: 2.1+')
-            self.pyinstVer = 21     # pyinstaller 2.1+
-            return True
-
-        print('[*] Error : Unsupported pyinstaller version or not a pyinstaller archive')
-        return False
+        # Check if it is a 2.0 archive
+        self.pyinstVer = 20     # pyinstaller 2.0
+        self.fileSize_nocert = offset + self.PYINST20_COOKIE_SIZE
+        print('[*] Pyinstaller version: 2.0')
+        return True
 
 
     def getCArchiveInfo(self):
         try:
-            if self.pyinstVer == 20:
-                self.fPtr.seek(self.fileSize - self.PYINST20_COOKIE_SIZE, os.SEEK_SET)
+            self.fPtr.seek(self.magic_offset, os.SEEK_SET)
 
+            if self.pyinstVer == 20:
                 # Read CArchive cookie
                 (magic, lengthofPackage, toc, tocLen, self.pyver) = \
                 struct.unpack('!8siiii', self.fPtr.read(self.PYINST20_COOKIE_SIZE))
 
             elif self.pyinstVer == 21:
-                self.fPtr.seek(self.fileSize - self.PYINST21_COOKIE_SIZE, os.SEEK_SET)
-
                 # Read CArchive cookie
                 (magic, lengthofPackage, toc, tocLen, self.pyver, pylibname) = \
                 struct.unpack('!8siiii64s', self.fPtr.read(self.PYINST21_COOKIE_SIZE))
@@ -121,7 +128,7 @@ class PyInstArchive:
 
         # Overlay is the data appended at the end of the PE
         self.overlaySize = lengthofPackage
-        self.overlayPos = self.fileSize - self.overlaySize
+        self.overlayPos = self.fileSize_nocert - self.overlaySize
         self.tableOfContentsPos = self.overlayPos + toc
         self.tableOfContentsSize = tocLen
 
